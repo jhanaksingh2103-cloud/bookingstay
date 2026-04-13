@@ -187,3 +187,4 @@ staybook/
 | Port 3001 already in use       | Change PORT in server.js line 1: `const PORT = 3002`    |
 | White screen in browser        | Make sure server is running, check terminal for errors  |
 | Database errors                | Delete `staybook.db` and restart — it will be recreated |
+# staybook2.2
