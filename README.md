@@ -191,3 +191,4 @@ staybook/
 # staybook2.2
 # staybook2.2
 # bookingstay
+# bookingstay
