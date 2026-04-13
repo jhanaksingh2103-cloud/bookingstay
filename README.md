@@ -188,3 +188,4 @@ staybook/
 | White screen in browser        | Make sure server is running, check terminal for errors  |
 | Database errors                | Delete `staybook.db` and restart — it will be recreated |
 # staybook2.2
+# staybook2.2
