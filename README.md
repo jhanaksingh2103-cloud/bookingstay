@@ -189,3 +189,4 @@ staybook/
 | Database errors                | Delete `staybook.db` and restart — it will be recreated |
 # staybook2.2
 # staybook2.2
+# staybook2.2
