@@ -8,10 +8,19 @@ const cors = require('cors');
 const Database = require('better-sqlite3');
 const { v4: uuidv4 } = require('uuid');
 const nodemailer = require('nodemailer');
+const mongoose = require('mongoose');
 const path = require('path');
 
 const app = express();
-const PORT = process.env.PORT || 3001;
+const PORT = parseInt(process.env.PORT || '3001', 10);
+
+if (process.env.MONGO_URI) {
+  mongoose.connect(process.env.MONGO_URI)
+    .then(() => console.log('MongoDB Connected'))
+    .catch(err => console.log(err));
+} else {
+  console.log('⚠️ MONGO_URI not set, skipping MongoDB connection');
+}
 
 // ── Authentication ──────────────────────────────────────────
 const USERS = {
@@ -41,14 +50,17 @@ function requireAuth(req, res, next) {
 app.use(cors({ origin: '*' }));
 app.use(express.json());
 
-// Serve login page at root
+// Serve properties page at root
 app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'login.html'));
+  res.sendFile(path.join(__dirname, 'public', 'properties.html'));
 });
 
-// Serve protected main app
+// Keep explicit app and login routes
 app.get('/app', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+app.get('/login', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'login.html'));
 });
 
 // Serve static files for public assets
@@ -62,8 +74,10 @@ console.log(`🗄️ Using DB at: ${DB_PATH}`);
 db.exec(`
   CREATE TABLE IF NOT EXISTS bookings (
     id           TEXT PRIMARY KEY,
+    property_id  TEXT DEFAULT 'property-1',
     guest_name   TEXT NOT NULL,
     guest_email  TEXT NOT NULL,
+    id_image     TEXT DEFAULT '',
     guest_phone  TEXT DEFAULT '',
     check_in     TEXT NOT NULL,
     check_out    TEXT NOT NULL,
@@ -75,6 +89,7 @@ db.exec(`
     status       TEXT DEFAULT 'pending',
     color        TEXT DEFAULT '#0d9488',
     initials     TEXT DEFAULT '??',
+    booking_source TEXT DEFAULT 'personal',
     form_link    TEXT DEFAULT '',
     form_sent    INTEGER DEFAULT 0,
     form_sent_at TEXT DEFAULT NULL,
@@ -96,6 +111,20 @@ db.exec(`
     value TEXT NOT NULL
   );
 `);
+
+// Safe migrations for existing DBs
+const bookingCols = db.prepare("PRAGMA table_info(bookings)").all().map(c => c.name);
+if (!bookingCols.includes('booking_source')) {
+  db.exec("ALTER TABLE bookings ADD COLUMN booking_source TEXT DEFAULT 'personal';");
+}
+if (!bookingCols.includes('property_id')) {
+  db.exec("ALTER TABLE bookings ADD COLUMN property_id TEXT DEFAULT 'property-1';");
+}
+if (!bookingCols.includes('id_image')) {
+  db.exec("ALTER TABLE bookings ADD COLUMN id_image TEXT DEFAULT ''; ");
+}
+db.exec("UPDATE bookings SET property_id='property-1' WHERE property_id IS NULL OR trim(property_id)='';");
+db.exec("UPDATE bookings SET property_id='property-1' WHERE property_id NOT IN ('property-1','property-2','property-3','property-4');");
 
 // ── Seed demo data ──────────────────────────────────────────
 const count = db.prepare('SELECT COUNT(*) as c FROM bookings').get();
@@ -176,22 +205,44 @@ if (count.c === 0) {
 const insSettingDefault = db.prepare("INSERT OR IGNORE INTO host_settings VALUES (?, ?)");
 insSettingDefault.run('gmail_user', '');
 insSettingDefault.run('gmail_app_password', '');
-insSettingDefault.run('resend_api_key', '');
-insSettingDefault.run('resend_from_email', 'onboarding@resend.dev');
 
 // ── Helpers ─────────────────────────────────────────────────
-const COLORS = ['#0d9488','#6366f1','#f59e0b','#ec4899','#14b8a6','#8b5cf6','#f97316','#06b6d4'];
-let colorIdx = db.prepare('SELECT COUNT(*) as c FROM bookings').get().c;
-const nextColor = () => COLORS[colorIdx++ % COLORS.length];
+const SOURCE_COLORS = {
+  personal: '#86efac', // light green
+  airbnb: '#fca5a5'    // light red
+};
+const normalizeSource = (s) => (String(s || 'personal').toLowerCase() === 'airbnb' ? 'airbnb' : 'personal');
+const colorForSource = (s) => SOURCE_COLORS[normalizeSource(s)] || SOURCE_COLORS.personal;
 const getInitials = name => name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase();
+const normalizeFieldKey = (key) => String(key || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+const getFieldValue = (obj, aliases) => {
+  if (!obj || typeof obj !== 'object') return '';
+  const wanted = aliases.map(normalizeFieldKey);
+  for (const [k, v] of Object.entries(obj)) {
+    if (wanted.includes(normalizeFieldKey(k))) {
+      return Array.isArray(v) ? String(v[0] || '').trim() : String(v || '').trim();
+    }
+  }
+  return '';
+};
 
 const withResponses = (b) => {
-  const resp = db.prepare('SELECT * FROM form_responses WHERE booking_id = ? ORDER BY submitted_at DESC LIMIT 1').get(b.id);
+  const respRows = db.prepare('SELECT * FROM form_responses WHERE booking_id = ? ORDER BY submitted_at DESC').all(b.id);
+  const latest = respRows[0] || null;
+  const booking_source = normalizeSource(b.booking_source);
   return {
     ...b,
+    booking_source,
+    color: colorForSource(booking_source),
     form_sent: !!b.form_sent,
-    form_responded: !!resp,
-    form_responses: resp ? JSON.parse(resp.response_data) : {}
+    form_responded: !!latest,
+    form_response_count: respRows.length,
+    form_responses: latest ? JSON.parse(latest.response_data) : {},
+    form_responses_all: respRows.map(r => ({
+      id: r.id,
+      submitted_at: r.submitted_at,
+      data: JSON.parse(r.response_data)
+    }))
   };
 };
 
@@ -245,9 +296,11 @@ app.get('/api/auth/verify', (req, res) => {
 // Protected routes - require authentication
 // GET /api/bookings
 app.get('/api/bookings', requireAuth, (req, res) => {
-  const { month, year } = req.query;
+  const { month, year, property_id } = req.query;
+  const pid = String(property_id || 'property-1');
   let q = "SELECT * FROM bookings WHERE status != 'cancelled'";
-  const p = [];
+  const p = [pid];
+  q += ' AND property_id = ?';
   if (month !== undefined && year !== undefined) {
     q += " AND strftime('%m', check_in) = ? AND strftime('%Y', check_in) = ?";
     p.push(String(parseInt(month) + 1).padStart(2, '0'), String(year));
@@ -266,16 +319,18 @@ app.get('/api/bookings/:id', requireAuth, (req, res) => {
 
 // POST /api/bookings
 app.post('/api/bookings', requireAuth, (req, res) => {
-  const { guest_name, guest_email, guest_phone, check_in, check_out, check_in_time, check_out_time, guests, amount } = req.body || {};
+  const { guest_name, guest_email, guest_phone, check_in, check_out, check_in_time, check_out_time, guests, amount, booking_source, property_id } = req.body || {};
+  const normalizedPropertyId = String(property_id || 'property-1').trim() || 'property-1';
+  const normalizedCheckInTime = String(check_in_time || '14:00').trim() || '14:00';
+  const normalizedCheckOutTime = String(check_out_time || '11:00').trim() || '11:00';
+  const parsedGuests = guests === undefined || guests === null || String(guests).trim() === ''
+    ? 1
+    : parseInt(guests, 10);
   const requiredFields = {
     guest_name,
-    guest_email,
     guest_phone,
     check_in,
     check_out,
-    check_in_time,
-    check_out_time,
-    guests,
     amount
   };
 
@@ -294,22 +349,31 @@ app.post('/api/bookings', requireAuth, (req, res) => {
   if (Number.isNaN(parsedAmount) || parsedAmount <= 0)
     return res.status(400).json({ success: false, message: 'Amount is required and must be greater than 0' });
 
-  const parsedGuests = parseInt(guests, 10);
   if (Number.isNaN(parsedGuests) || parsedGuests <= 0)
     return res.status(400).json({ success: false, message: 'Guests is required and must be greater than 0' });
 
-  const newCheckIn = check_in_time;
-  const newCheckOut = check_out_time;
+  const newCheckIn = normalizedCheckInTime;
+  const newCheckOut = normalizedCheckOutTime;
+
+  const checkInDate = new Date(check_in);
+  const checkOutDate = new Date(check_out);
+  if (checkOutDate < checkInDate) {
+    return res.status(400).json({
+      success: false,
+      message: 'Check-out must be on or after check-in date'
+    });
+  }
 
   // Check for overlapping bookings with time consideration
   const overlap = db.prepare(`
     SELECT guest_name, check_in, check_out, check_in_time, check_out_time FROM bookings 
     WHERE status != 'cancelled' 
+    AND property_id = ?
     AND NOT (
       (check_out < ? OR (check_out = ? AND check_out_time <= ?)) OR
       (check_in > ? OR (check_in = ? AND check_in_time >= ?))
     )
-  `).get(check_in, check_in, newCheckIn, check_out, check_out, newCheckOut);
+  `).get(normalizedPropertyId, check_in, check_in, newCheckIn, check_out, check_out, newCheckOut);
 
   if (overlap) {
     const overlapCheckIn = `${overlap.check_in} ${overlap.check_in_time}`;
@@ -321,24 +385,27 @@ app.post('/api/bookings', requireAuth, (req, res) => {
   }
 
   const nights = Math.max(1, Math.ceil((new Date(check_out) - new Date(check_in)) / 86400000));
+  const normalizedSource = normalizeSource(booking_source);
   const b = {
-    id: uuidv4(), guest_name, guest_email,
+    id: uuidv4(), guest_name, guest_email: guest_email || '',
+    property_id: normalizedPropertyId,
     guest_phone,
     check_in, check_out,
-    check_in_time,
-    check_out_time,
+    check_in_time: normalizedCheckInTime,
+    check_out_time: normalizedCheckOutTime,
     guests: parsedGuests,
     nights,
     amount: parsedAmount,
     status: 'pending',
-    color: nextColor(),
+    color: colorForSource(normalizedSource),
     initials: getInitials(guest_name),
+    booking_source: normalizedSource,
     form_link: '', form_sent: 0, form_sent_at: null, host_notes: ''
   };
 
   db.prepare(`
-    INSERT INTO bookings (id,guest_name,guest_email,guest_phone,check_in,check_out,check_in_time,check_out_time,guests,nights,amount,status,color,initials,form_link,form_sent,host_notes)
-    VALUES (@id,@guest_name,@guest_email,@guest_phone,@check_in,@check_out,@check_in_time,@check_out_time,@guests,@nights,@amount,@status,@color,@initials,@form_link,@form_sent,@host_notes)
+    INSERT INTO bookings (id,property_id,guest_name,guest_email,guest_phone,check_in,check_out,check_in_time,check_out_time,guests,nights,amount,status,color,initials,booking_source,form_link,form_sent,host_notes)
+    VALUES (@id,@property_id,@guest_name,@guest_email,@guest_phone,@check_in,@check_out,@check_in_time,@check_out_time,@guests,@nights,@amount,@status,@color,@initials,@booking_source,@form_link,@form_sent,@host_notes)
   `).run(b);
 
   res.status(201).json({ success: true, data: { ...b, form_responded: false, form_responses: {} } });
@@ -347,15 +414,101 @@ app.post('/api/bookings', requireAuth, (req, res) => {
 // PATCH /api/bookings/:id
 app.patch('/api/bookings/:id', requireAuth, (req, res) => {
   const { id } = req.params;
-  if (!db.prepare('SELECT id FROM bookings WHERE id = ?').get(id))
+  const existing = db.prepare('SELECT * FROM bookings WHERE id = ?').get(id);
+  if (!existing)
     return res.status(404).json({ success: false, message: 'Not found' });
 
-  const allowed = ['status','host_notes','form_link','guest_name','guest_email','guest_phone','amount'];
+  const allowed = [
+    'status','host_notes','form_link',
+    'guest_name','guest_email','guest_phone',
+    'check_in','check_out','check_in_time','check_out_time',
+    'guests','amount','booking_source'
+  ];
   const updates = {};
   allowed.forEach(f => { if (req.body[f] !== undefined) updates[f] = req.body[f]; });
   if (!Object.keys(updates).length)
     return res.status(400).json({ success: false, message: 'Nothing to update' });
 
+  const merged = {
+    ...existing,
+    ...updates
+  };
+
+  const requiredFields = {
+    guest_name: merged.guest_name,
+    guest_phone: merged.guest_phone,
+    check_in: merged.check_in,
+    check_out: merged.check_out,
+    amount: merged.amount
+  };
+
+  const missingFields = Object.entries(requiredFields)
+    .filter(([, v]) => v === undefined || v === null || String(v).trim() === '')
+    .map(([k]) => k);
+
+  if (missingFields.length) {
+    return res.status(400).json({
+      success: false,
+      message: `Missing required fields: ${missingFields.join(', ')}`
+    });
+  }
+
+  const parsedAmount = parseInt(merged.amount, 10);
+  if (Number.isNaN(parsedAmount) || parsedAmount <= 0)
+    return res.status(400).json({ success: false, message: 'Amount is required and must be greater than 0' });
+
+  const normalizedCheckInTime = String(merged.check_in_time || '14:00').trim() || '14:00';
+  const normalizedCheckOutTime = String(merged.check_out_time || '11:00').trim() || '11:00';
+  const parsedGuests = merged.guests === undefined || merged.guests === null || String(merged.guests).trim() === ''
+    ? 1
+    : parseInt(merged.guests, 10);
+
+  if (Number.isNaN(parsedGuests) || parsedGuests <= 0)
+    return res.status(400).json({ success: false, message: 'Guests is required and must be greater than 0' });
+
+  const checkInDateTime = new Date(`${merged.check_in}T${normalizedCheckInTime}`);
+  const checkOutDateTime = new Date(`${merged.check_out}T${normalizedCheckOutTime}`);
+  if (checkOutDateTime <= checkInDateTime) {
+    return res.status(400).json({
+      success: false,
+      message: 'Check-out must be after check-in'
+    });
+  }
+
+  // Check overlap against other bookings (exclude current booking id)
+  const overlap = db.prepare(`
+    SELECT guest_name, check_in, check_out, check_in_time, check_out_time FROM bookings
+    WHERE status != 'cancelled'
+      AND id != ?
+      AND property_id = ?
+      AND NOT (
+        (check_out < ? OR (check_out = ? AND check_out_time <= ?)) OR
+        (check_in > ? OR (check_in = ? AND check_in_time >= ?))
+      )
+    LIMIT 1
+  `).get(id, merged.property_id || 'property-1', merged.check_in, merged.check_in, normalizedCheckInTime, merged.check_out, merged.check_out, normalizedCheckOutTime);
+
+  if (overlap) {
+    const overlapCheckIn = `${overlap.check_in} ${overlap.check_in_time}`;
+    const overlapCheckOut = `${overlap.check_out} ${overlap.check_out_time}`;
+    return res.status(409).json({
+      success: false,
+      message: `Booking conflicts with ${overlap.guest_name} (${overlapCheckIn} to ${overlapCheckOut})`
+    });
+  }
+
+  updates.check_in_time = normalizedCheckInTime;
+  updates.check_out_time = normalizedCheckOutTime;
+  updates.amount = parsedAmount;
+  updates.guests = parsedGuests;
+  if (updates.booking_source !== undefined) {
+    updates.booking_source = normalizeSource(updates.booking_source);
+    updates.color = colorForSource(updates.booking_source);
+  }
+  updates.nights = Math.max(1, Math.ceil((new Date(merged.check_out) - new Date(merged.check_in)) / 86400000));
+  if (updates.guest_name !== undefined) {
+    updates.initials = getInitials(String(merged.guest_name));
+  }
   updates.updated_at = new Date().toISOString();
   const set = Object.keys(updates).map(k => `${k} = @${k}`).join(', ');
   db.prepare(`UPDATE bookings SET ${set} WHERE id = @id`).run({ ...updates, id });
@@ -377,140 +530,115 @@ app.post('/api/bookings/:id/send-form', requireAuth, async (req, res) => {
 
   const b = db.prepare('SELECT * FROM bookings WHERE id = ?').get(req.params.id);
   if (!b) return res.status(404).json({ success: false, message: 'Booking not found' });
+  // Get Gmail credentials from property-specific settings
+  const propertySettings = readPropertySettings(b.property_id || getDefaultPropertyId());
+  
 
-  // Get email credentials from settings
-  const gmailUser = db.prepare("SELECT value FROM host_settings WHERE key='gmail_user'").get()?.value;
-  const gmailPass = db.prepare("SELECT value FROM host_settings WHERE key='gmail_app_password'").get()?.value;
-  const resendApiKey = db.prepare("SELECT value FROM host_settings WHERE key='resend_api_key'").get()?.value;
-  const resendFromEmail = db.prepare("SELECT value FROM host_settings WHERE key='resend_from_email'").get()?.value || 'onboarding@resend.dev';
-  const propertyName = db.prepare("SELECT value FROM host_settings WHERE key='property_name'").get()?.value || 'StayBook';
+  
 
-  try {
-    const subject = `${propertyName} — Please fill out your guest form`;
-    const html = `
-        <div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:24px">
-          <h2 style="color:#0d9488;margin-bottom:4px">Hello ${b.guest_name}! 👋</h2>
-          <p style="color:#475569;font-size:15px;line-height:1.6">
-            We're excited to host you at <strong>${propertyName}</strong>!<br>
-            Please take a moment to fill out the guest form before your stay:
-          </p>
-          <div style="margin:24px 0">
-            <a href="${form_link}" 
-               style="background:#0d9488;color:#fff;padding:14px 28px;border-radius:10px;text-decoration:none;font-weight:600;font-size:15px;display:inline-block">
-              📋 Fill Guest Form
-            </a>
-          </div>
-          <div style="background:#f0fdfa;border-radius:10px;padding:16px;margin-top:16px">
-            <p style="margin:0;font-size:13px;color:#475569"><strong>Your booking details:</strong></p>
-            <p style="margin:6px 0 0;font-size:13px;color:#475569">
-              📅 Check-in: ${b.check_in} at ${b.check_in_time || '14:00'}<br>
-              📅 Check-out: ${b.check_out} at ${b.check_out_time || '11:00'}<br>
-              👥 Guests: ${b.guests}
-            </p>
-          </div>
-          <p style="color:#94a3b8;font-size:12px;margin-top:24px">Sent via StayBook</p>
-        </div>
-      `;
-
-    const useResend = String(resendApiKey || '').trim().length > 0;
-    if (useResend) {
-      const rr = await fetch('https://api.resend.com/emails', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${String(resendApiKey).trim()}`
-        },
-        body: JSON.stringify({
-          from: `"${propertyName}" <${String(resendFromEmail).trim() || 'onboarding@resend.dev'}>`,
-          to: [b.guest_email],
-          subject,
-          html
-        })
-      });
-
-      if (!rr.ok) {
-        const errText = await rr.text();
-        let resendMsg = `Resend error (${rr.status})`;
-        try {
-          const parsed = JSON.parse(errText);
-          resendMsg = parsed?.message || resendMsg;
-        } catch (_) {
-          // keep fallback message
-        }
-
-        if (String(resendMsg).includes('You can only send testing emails')) {
-          throw new Error('Resend test mode: send only to your Resend account email, or verify a domain at resend.com/domains and use that sender.');
-        }
-
-        if (String(resendMsg).includes('domain is not verified')) {
-          throw new Error('Resend sender domain is not verified. Verify domain at resend.com/domains, then use a sender from that domain.');
-        }
-
-        throw new Error(resendMsg);
-      }
-    } else {
-      const smtpUser = String(gmailUser || '').trim();
-      const smtpPass = String(gmailPass || '').trim().replace(/\s+/g, '');
-
-      if (!smtpUser || !smtpPass) {
-        return res.status(400).json({
-          success: false,
-          message: 'Email not configured. In Settings, add Resend API key (recommended) or Gmail address + App Password.'
-        });
-      }
-
-      const transporter = nodemailer.createTransport({
-        service: 'gmail',
-        auth: { user: smtpUser, pass: smtpPass }
-      });
-
-      await transporter.sendMail({
-      from: `"${propertyName}" <${smtpUser}>`,
-      to: b.guest_email,
-      subject,
-      html
-      });
-    }
+ 
 
     // Update DB after successful send
     const now = new Date().toISOString();
     db.prepare("UPDATE bookings SET form_link=?, form_sent=1, form_sent_at=?, updated_at=? WHERE id=?")
       .run(form_link, now, now, req.params.id);
 
-    console.log(`📧 Email sent to ${b.guest_email} with form link`);
-    res.json({ success: true, message: `Form emailed to ${b.guest_email}` });
-  } catch (err) {
-    console.error('❌ Email send error:', err.message);
-    res.status(500).json({ 
-      success: false, 
-      message: `Email failed: ${err.message}` 
-    });
+    
+  
+});
+
+// POST /api/bookings/:id/send-whatsapp
+app.post('/api/bookings/:id/send-whatsapp', requireAuth, (req, res) => {
+  const { form_link } = req.body;
+  if (!form_link) return res.status(400).json({ success: false, message: 'form_link required' });
+
+  const b = db.prepare('SELECT * FROM bookings WHERE id = ?').get(req.params.id);
+  if (!b) return res.status(404).json({ success: false, message: 'Booking not found' });
+
+  const rawPhone = String(b.guest_phone || '').trim();
+  if (!rawPhone) {
+    return res.status(400).json({ success: false, message: 'Guest phone number not found' });
   }
+
+  // Keep digits only; WhatsApp expects country code + number without symbols
+  let phone = rawPhone.replace(/\D/g, '');
+  if (phone.length === 10) phone = `91${phone}`; // default to India country code for local numbers
+  if (phone.length < 11) {
+    return res.status(400).json({ success: false, message: 'Invalid guest phone number for WhatsApp' });
+  }
+
+  const propertyName = db.prepare("SELECT value FROM host_settings WHERE key='property_name'").get()?.value || 'StayBook';
+  const message = `Hi ${b.guest_name}, please fill your guest form for ${propertyName}: ${form_link}`;
+  const whatsappUrl = `https://wa.me/${phone}?text=${encodeURIComponent(message)}`;
+
+  const now = new Date().toISOString();
+  db.prepare("UPDATE bookings SET form_link=?, form_sent=1, form_sent_at=?, updated_at=? WHERE id=?")
+    .run(form_link, now, now, req.params.id);
+
+  res.json({
+    success: true,
+    message: 'WhatsApp link ready',
+    data: { whatsapp_url: whatsappUrl }
+  });
 });
 
 // POST /api/submit-form/:booking_id  ← PUBLIC webhook (Google Form posts here)
 app.post('/api/submit-form/:booking_id', (req, res) => {
   const { booking_id } = req.params;
-  if (!db.prepare('SELECT id FROM bookings WHERE id = ?').get(booking_id))
-    return res.status(404).json({ success: false, message: 'Booking not found' });
 
   const data = req.body;
   if (!data || !Object.keys(data).length)
     return res.status(400).json({ success: false, message: 'No form data' });
 
+  const payloadBookingId = getFieldValue(data, ['booking_id', 'booking id', 'bookingid']);
+  const resolvedBookingId = booking_id && booking_id !== ':booking_id' ? booking_id : payloadBookingId;
+
+  const guestName = getFieldValue(data, ['guest_name', 'name', 'full_name', 'fullname']);
+  const guestPhone = getFieldValue(data, ['guest_phone', 'phone', 'mobile', 'phone_number', 'contact_number']);
+  const guestEmail = getFieldValue(data, ['guest_email', 'email', 'email_address']);
+  const idImage = getFieldValue(data, [
+    'id_image',
+    'id image',
+    'aadhaar/id image',
+    'aadhaar image',
+    'aadhaar',
+    'aadhaar_id_image',
+    'idproof',
+    'id_proof_image'
+  ]);
+
+  let booking = db.prepare('SELECT * FROM bookings WHERE id = ?').get(resolvedBookingId);
+  if (!booking && guestName) {
+    booking = db.prepare('SELECT * FROM bookings WHERE lower(guest_name) = lower(?) ORDER BY created_at DESC LIMIT 1').get(guestName);
+  }
+  if (!booking)
+    return res.status(404).json({ success: false, message: 'Booking not found' });
+
   db.prepare("INSERT INTO form_responses (id, booking_id, response_data) VALUES (?, ?, ?)")
-    .run(uuidv4(), booking_id, JSON.stringify(data));
+    .run(uuidv4(), booking.id, JSON.stringify(data));
 
-  db.prepare("UPDATE bookings SET status='confirmed', updated_at=? WHERE id=?")
-    .run(new Date().toISOString(), booking_id);
+  const now = new Date().toISOString();
+  db.prepare(`
+    UPDATE bookings
+    SET guest_name = ?, guest_phone = ?, guest_email = ?, id_image = ?, status='confirmed', updated_at=?
+    WHERE id=?
+  `).run(
+    guestName || booking.guest_name,
+    guestPhone || booking.guest_phone,
+    guestEmail || booking.guest_email,
+    idImage || booking.id_image || '',
+    now,
+    booking.id
+  );
 
-  console.log(`📋 Form response received for booking ${booking_id}`);
-  res.json({ success: true, message: 'Response saved' });
+  console.log(`📋 Form response received for booking ${booking.id}`);
+  res.json({ success: true, message: 'Response saved', data: { booking_id: booking.id, id_image: idImage || booking.id_image || '' } });
 });
 
 // GET /api/stats
 app.get('/api/stats', requireAuth, (req, res) => {
-  const { month, year } = req.query;
+  const { month, year, property_id } = req.query;
+  const pid = String(property_id || 'property-1');
   const mm = String(parseInt(month ?? new Date().getMonth()) + 1).padStart(2, '0');
   const yy = String(year ?? new Date().getFullYear());
 
@@ -519,8 +647,8 @@ app.get('/api/stats', requireAuth, (req, res) => {
       SUM(CASE WHEN status='confirmed' THEN 1 ELSE 0 END) as confirmed,
       SUM(CASE WHEN status='pending'   THEN 1 ELSE 0 END) as pending
     FROM bookings
-    WHERE strftime('%m',check_in)=? AND strftime('%Y',check_in)=? AND status!='cancelled'
-  `).get(mm, yy);
+    WHERE strftime('%m',check_in)=? AND strftime('%Y',check_in)=? AND status!='cancelled' AND property_id=?
+  `).get(mm, yy, pid);
 
   const dim = new Date(parseInt(yy), parseInt(mm), 0).getDate();
   res.json({ success: true, data: {
@@ -550,15 +678,29 @@ app.get('*', (req, res) => {
 });
 
 // ── Start ────────────────────────────────────────────────────
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`\n🏠 StayBook running on port ${PORT}`);
-  console.log(`\n📡 API Endpoints:`);
-  console.log(`   GET    /api/bookings`);
-  console.log(`   POST   /api/bookings`);
-  console.log(`   PATCH  /api/bookings/:id`);
-  console.log(`   DELETE /api/bookings/:id`);
-  console.log(`   POST   /api/bookings/:id/send-form`);
-  console.log(`   POST   /api/submit-form/:booking_id  ← Google Forms webhook`);
-  console.log(`   GET    /api/stats`);
-  console.log(`   GET    /api/settings\n`);
-});
+function startServer(preferredPort) {
+  const server = app.listen(preferredPort, '0.0.0.0', () => {
+    console.log(`\n🏠 StayBook running on port ${preferredPort}`);
+    console.log(`\n📡 API Endpoints:`);
+    console.log(`   GET    /api/bookings`);
+    console.log(`   POST   /api/bookings`);
+    console.log(`   PATCH  /api/bookings/:id`);
+    console.log(`   DELETE /api/bookings/:id`);
+    console.log(`   POST   /api/bookings/:id/send-form`);
+    console.log(`   POST   /api/bookings/:id/send-whatsapp`);
+    console.log(`   POST   /api/submit-form/:booking_id  ← Google Forms webhook`);
+    console.log(`   GET    /api/stats`);
+    console.log(`   GET    /api/settings\n`);
+  });
+
+  server.on('error', (err) => {
+    if (err.code === 'EADDRINUSE' && !process.env.PORT) {
+      const nextPort = preferredPort + 1;
+      console.warn(`⚠️ Port ${preferredPort} is in use. Retrying on ${nextPort}...`);
+      return startServer(nextPort);
+    }
+    throw err;
+  });
+}
+
+startServer(PORT);
