@@ -10,7 +10,6 @@ const HostSetting = require('./models/HostSetting');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const MONGO_URI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/homestay';
 
 const USERS = {
   admin: { password: 'admin123', name: 'Admin User' },
@@ -359,15 +358,15 @@ app.get('/api/stats', requireAuth, async (req, res) => {
 
 app.get('*', (req, res) => res.redirect('/'));
 
-async function bootstrap() {
-  await mongoose.connect(MONGO_URI);
-  await ensureDefaultSettings();
-  app.listen(PORT, () => {
-    console.log('Server running on port ' + PORT);
+mongoose.connect(process.env.MONGO_URI)
+  .then(async () => {
+    console.log('MongoDB connected');
+    await ensureDefaultSettings();
+    app.listen(PORT, () => {
+      console.log('Server running on port ' + PORT);
+    });
+  })
+  .catch((err) => {
+    console.log(err);
+    process.exit(1);
   });
-}
-
-bootstrap().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
