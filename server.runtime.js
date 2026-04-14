@@ -111,7 +111,7 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('/', (req, res) => {
-  res.send('Server is running 🚀');
+  res.send('Server is working 🚀');
 });
 app.get('/app', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 app.get('/properties', (req, res) => res.sendFile(path.join(__dirname, 'public', 'properties.html')));
