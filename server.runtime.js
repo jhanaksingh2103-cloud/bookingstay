@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const { v4: uuidv4 } = require('uuid');
@@ -9,7 +10,6 @@ const FormResponse = require('./models/FormResponse');
 const HostSetting = require('./models/HostSetting');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
 
 const USERS = {
   admin: { password: 'admin123', name: 'Admin User' },
@@ -362,11 +362,13 @@ mongoose.connect(process.env.MONGO_URI)
   .then(async () => {
     console.log('MongoDB connected');
     await ensureDefaultSettings();
+
+    const PORT = process.env.PORT || 3000;
+
     app.listen(PORT, () => {
       console.log('Server running on port ' + PORT);
     });
   })
   .catch((err) => {
-    console.log(err);
-    process.exit(1);
+    console.error('Mongo error:', err);
   });
