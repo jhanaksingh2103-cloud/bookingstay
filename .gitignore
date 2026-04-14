@@ -2,3 +2,5 @@ node_modules/
 staybook.db
 .env
 *.log
+.mongodb-data/
+.DS_Store

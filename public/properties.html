@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>StayBook — Properties</title>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{--teal:#0d9488;--ink:#0f172a;--muted:#94a3b8;--border:#e2e8f0;--white:#fff;--bg:#e8f4f3;--surface:#f8fafc}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--ink)}
+  .shell{max-width:430px;min-height:100vh;margin:0 auto;background:var(--white);box-shadow:0 12px 40px rgba(0,0,0,.15)}
+  .hdr{padding:18px;border-bottom:1px solid var(--border);display:flex;align-items:flex-start;justify-content:space-between}
+  .logo{font-family:'Syne',sans-serif;font-size:22px;font-weight:800}
+  .logo .s{color:var(--teal)}
+  .tag{font-size:11px;color:var(--muted);margin-top:4px}
+  .btn{background:var(--teal);color:#fff;border:none;border-radius:16px;padding:10px 14px;font-weight:700;font-size:12px;cursor:pointer}
+  .body{padding:14px}
+  .card{border:1.5px solid var(--border);border-radius:20px;overflow:hidden;margin-bottom:14px;background:#fff}
+  .img{width:100%;height:200px;object-fit:cover;background:#dbeafe}
+  .img.clickable{cursor:pointer}
+  .cont{padding:14px}
+  .pill{display:inline-flex;align-items:center;gap:6px;background:#e7f8f4;color:#15803d;font-size:11px;font-weight:700;padding:5px 10px;border-radius:999px}
+  .pill:before{content:'';width:8px;height:8px;border-radius:50%;background:#16a34a}
+  .meta{display:flex;align-items:center;justify-content:space-between}
+  .menu-wrap{position:relative}
+  .kebab{width:30px;height:30px;border:none;background:transparent;border-radius:8px;color:#22c55e;font-size:24px;line-height:1;cursor:pointer}
+  .kebab:hover{background:#f1f5f9}
+  .menu{position:absolute;top:34px;right:0;min-width:120px;background:#fff;border:1.5px solid var(--border);border-radius:12px;box-shadow:0 12px 24px rgba(15,23,42,.12);padding:6px;display:none;z-index:5}
+  .menu.open{display:block}
+  .menu button{width:100%;text-align:left;border:none;background:#fff;border-radius:8px;padding:9px 10px;font-weight:700;font-size:13px;cursor:pointer}
+  .menu button:hover{background:#f8fafc}
+  .menu .m-edit{color:#0d9488}
+  .menu .m-delete{color:#b91c1c}
+  h3{font-family:'Syne',sans-serif;font-size:17px;margin:10px 0 4px}
+  .loc{color:#64748b;font-weight:600}
+  .ghost{border:none;border-radius:12px;padding:10px 12px;font-weight:700;cursor:pointer}
+  .edit{background:#eaf8f6;color:#0d9488}
+  .open{background:#0d9488;color:#fff}
+  .delete{background:#fee2e2;color:#b91c1c}
+  .overlay{position:fixed;inset:0;background:rgba(15,23,42,.45);display:none;align-items:flex-end;justify-content:center;z-index:100}
+  .overlay.open{display:flex}
+  .sheet{width:100%;max-width:430px;background:#fff;border-radius:20px 20px 0 0;padding:14px}
+  .sheet h4{font-family:'Syne',sans-serif;font-size:16px;margin-bottom:10px}
+  .fgroup{margin-bottom:10px}
+  .label{display:block;font-size:11px;color:#475569;font-weight:700;margin-bottom:4px}
+  .input,.textarea,.select{width:100%;border:1.5px solid var(--border);border-radius:10px;padding:10px 12px;font-size:13px}
+  .textarea{min-height:84px;resize:vertical}
+  .img-tools{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
+  .mini{font-size:12px;padding:9px 10px}
+  .hint{font-size:11px;color:#64748b;line-height:1.4;margin-top:7px}
+  .preview{width:100%;height:130px;object-fit:cover;border:1.5px solid var(--border);border-radius:12px;background:#f1f5f9;margin-top:8px}
+  .btnrow{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
+  .cancel{background:#e2e8f0;color:#0f172a}
+
+  .calendar-overlay{position:fixed;inset:0;background:#e8f4f3;display:none;z-index:250}
+  .calendar-overlay.open{display:flex;flex-direction:column}
+  .calendar-top{max-width:430px;width:100%;margin:0 auto;background:#fff;border-bottom:1px solid var(--border);padding:12px 14px;display:flex;align-items:center;justify-content:space-between;gap:10px}
+  .calendar-title{font-family:'Syne',sans-serif;font-size:15px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .back-btn{background:#eaf8f6;color:#0d9488;border:none;border-radius:10px;padding:8px 12px;font-weight:700;cursor:pointer}
+  .calendar-frame-wrap{flex:1;max-width:430px;width:100%;margin:0 auto;background:#fff}
+  .calendar-frame{width:100%;height:100%;border:none;display:block}
+</style>
+</head>
+<body>
+  <div class="shell">
+    <div class="hdr">
+      <div>
+        <div class="logo"><span class="s">Stay</span>Book</div>
+        <div class="tag">Manage multiple properties in one place</div>
+      </div>
+      <button class="btn" onclick="openCalendar()">Add</button>
+    </div>
+
+    <div class="body" id="propertyList"></div>
+  </div>
+
+  <div class="overlay" id="editOverlay">
+    <div class="sheet">
+      <h4>Edit Property</h4>
+      <div class="fgroup">
+        <label class="label" for="e-title">Property name</label>
+        <input id="e-title" class="input" placeholder="Property name">
+      </div>
+      <div class="fgroup">
+        <label class="label" for="e-location">Location</label>
+        <input id="e-location" class="input" placeholder="City, State">
+      </div>
+      <div class="fgroup">
+        <label class="label" for="e-image">Add Image from Gallery</label>
+        <div class="img-tools" style="grid-template-columns:1fr;">
+          <button class="ghost edit mini" onclick="chooseGalleryImage()">Add Image</button>
+        </div>
+        <input id="e-image-file" type="file" accept="image/*" style="display:none" onchange="handleImageFile(event)">
+        <div class="hint">Example: select a room, kitchen, living area, or any property photo from your gallery.</div>
+        <img id="e-image-preview" class="preview" alt="Image preview">
+      </div>
+      <div class="fgroup">
+        <label class="label" for="e-status">Status</label>
+        <select id="e-status" class="select">
+          <option value="Listed">Listed</option>
+          <option value="Unlisted">Unlisted</option>
+        </select>
+      </div>
+      <div class="btnrow">
+        <button class="ghost cancel" onclick="closeEditProperty()">Cancel</button>
+        <button class="ghost open" onclick="savePropertyEdit()">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="calendar-overlay" id="calendarOverlay">
+    <div class="calendar-top">
+      <button class="back-btn" onclick="closeCalendar()">← Properties</button>
+      <div class="calendar-title" id="calendarTitle">Calendar</div>
+    </div>
+    <div class="calendar-frame-wrap">
+      <iframe id="calendarFrame" class="calendar-frame" title="Property Calendar"></iframe>
+    </div>
+  </div>
+<script>
+  function openCalendar(propertyId){
+    const selected = propertyId || localStorage.getItem('staybook_active_property') || PROPERTIES?.[0]?.id || 'property-1';
+    localStorage.setItem('staybook_active_property', selected);
+
+    const property = (PROPERTIES || []).find(p => p.id === selected);
+    const title = property ? `${property.title} · Calendar` : 'Property Calendar';
+    document.getElementById('calendarTitle').textContent = title;
+
+    const pid = encodeURIComponent(selected);
+    document.getElementById('calendarFrame').src = `/app?property=${pid}`;
+    document.getElementById('calendarOverlay').classList.add('open');
+  }
+
+  function closeCalendar(){
+    document.getElementById('calendarOverlay').classList.remove('open');
+  }
+
+  const LEGACY_PROP_KEY = 'staybook_property_1';
+  const PROP_LIST_KEY = 'staybook_properties_v1';
+  let PROPERTIES = [];
+  let ACTIVE_PROPERTY_ID = null;
+  let EDIT_IMAGE_VALUE = '';
+
+  function getPropertyDefaults() {
+    return [
+      {
+        id: 'property-1',
+        title: 'Cozy Designer Penthouse',
+        location: 'Bengaluru, Karnataka',
+        description: 'Private terrace, bright interiors, and ideal for short city stays.',
+        image: 'https://images.unsplash.com/photo-1556912172-45b7abe8b7e1?q=80&w=1200&auto=format&fit=crop',
+        status: 'Listed'
+      },
+      {
+        id: 'property-2',
+        title: 'Sea View Studio',
+        location: 'Goa',
+        description: 'Sunset balcony, beach access, and perfect for weekend getaways.',
+        image: 'https://images.unsplash.com/photo-1499793983690-e29da59ef1c2?q=80&w=1200&auto=format&fit=crop',
+        status: 'Listed'
+      },
+      {
+        id: 'property-3',
+        title: 'Mountain Cabin Retreat',
+        location: 'Manali, Himachal Pradesh',
+        description: 'Wooden interiors, valley views, and peaceful workation vibes.',
+        image: 'https://images.unsplash.com/photo-1449824913935-59a10b8d2000?q=80&w=1200&auto=format&fit=crop',
+        status: 'Listed'
+      },
+      {
+        id: 'property-4',
+        title: 'Urban Sky Loft',
+        location: 'Mumbai, Maharashtra',
+        description: 'Modern design, central location, and fast check-in for city stays.',
+        image: 'https://images.unsplash.com/photo-1464890100898-a385f744067f?q=80&w=1200&auto=format&fit=crop',
+        status: 'Listed'
+      }
+    ];
+  }
+
+  function normalizeProperty(data, fallback) {
+    return {
+      id: data?.id || fallback.id,
+      title: data?.title || fallback.title,
+      location: data?.location || fallback.location,
+      description: data?.description || fallback.description,
+      image: data?.image || fallback.image,
+      status: data?.status === 'Unlisted' ? 'Unlisted' : 'Listed'
+    };
+  }
+
+  function loadProperties() {
+    const defaults = getPropertyDefaults();
+
+    try {
+      const rawList = localStorage.getItem(PROP_LIST_KEY);
+      if (rawList) {
+        const parsed = JSON.parse(rawList);
+        if (Array.isArray(parsed) && parsed.length) {
+          const normalized = parsed.map((item, index) => normalizeProperty(item, defaults[index] || defaults[0]));
+          if (normalized.length < 4) {
+            const filled = [...normalized];
+            for (let i = normalized.length; i < 4; i++) {
+              filled.push(defaults[i]);
+            }
+            localStorage.setItem(PROP_LIST_KEY, JSON.stringify(filled));
+            return filled;
+          }
+          return normalized;
+        }
+      }
+    } catch (_) {}
+
+    try {
+      const legacy = localStorage.getItem(LEGACY_PROP_KEY);
+      if (legacy) {
+        const oldData = JSON.parse(legacy);
+        const migrated = defaults.slice();
+        migrated[0] = normalizeProperty(oldData, defaults[0]);
+        localStorage.setItem(PROP_LIST_KEY, JSON.stringify(migrated));
+        return migrated;
+      }
+    } catch (_) {}
+
+    localStorage.setItem(PROP_LIST_KEY, JSON.stringify(defaults));
+    return defaults;
+  }
+
+  function saveProperties() {
+    localStorage.setItem(PROP_LIST_KEY, JSON.stringify(PROPERTIES));
+  }
+
+  function escapeHtml(text) {
+    return String(text)
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('"', '&quot;')
+      .replaceAll("'", '&#39;');
+  }
+
+  function renderProperties() {
+    const root = document.getElementById('propertyList');
+    if (!PROPERTIES.length) {
+      root.innerHTML = '<div class="card"><div class="cont"><h3>No properties</h3><div class="desc">All properties are deleted.</div></div></div>';
+      return;
+    }
+
+    root.innerHTML = PROPERTIES.map((p, i) => `
+      <div class="card" id="prop-card-${i}">
+        <img class="img clickable" src="${escapeHtml(p.image)}" alt="Property" onclick="openCalendar('${escapeHtml(p.id)}')">
+        <div class="cont">
+          <div class="meta">
+            <div class="pill">${escapeHtml(p.status)}</div>
+            <div class="menu-wrap">
+              <button class="kebab" onclick="togglePropertyMenu(event, ${i})">⋮</button>
+              <div class="menu" id="prop-menu-${i}">
+                <button class="m-edit" onclick="openEditProperty(${i});closeAllPropertyMenus()">Edit</button>
+                <button class="m-delete" onclick="deleteProperty(${i});closeAllPropertyMenus()">Delete</button>
+              </div>
+            </div>
+          </div>
+          <h3>${escapeHtml(p.title)}</h3>
+          <div class="loc">${escapeHtml(p.location)}</div>
+        </div>
+      </div>
+    `).join('');
+  }
+
+  function closeAllPropertyMenus() {
+    document.querySelectorAll('.menu.open').forEach(el => el.classList.remove('open'));
+  }
+
+  function togglePropertyMenu(event, index) {
+    event.stopPropagation();
+    const menu = document.getElementById(`prop-menu-${index}`);
+    if (!menu) return;
+    const isOpen = menu.classList.contains('open');
+    closeAllPropertyMenus();
+    if (!isOpen) menu.classList.add('open');
+  }
+
+  function updateEditImagePreview(src) {
+    const preview = document.getElementById('e-image-preview');
+    const fallback = getPropertyDefaults()[0].image;
+    preview.src = src || fallback;
+  }
+
+  function chooseGalleryImage() {
+    document.getElementById('e-image-file').click();
+  }
+
+  function fileToDataURL(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function handleImageFile(event) {
+    const file = event?.target?.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) return;
+    const dataUrl = await fileToDataURL(file);
+    EDIT_IMAGE_VALUE = dataUrl;
+    document.getElementById('e-image').value = '';
+    updateEditImagePreview(dataUrl);
+  }
+
+  function openEditProperty(index) {
+    const data = PROPERTIES[index];
+    if (!data) return;
+    ACTIVE_PROPERTY_ID = index;
+    document.getElementById('e-title').value = data.title;
+    document.getElementById('e-location').value = data.location;
+    EDIT_IMAGE_VALUE = data.image;
+    document.getElementById('e-status').value = data.status;
+    updateEditImagePreview(data.image);
+    document.getElementById('editOverlay').classList.add('open');
+  }
+
+  function closeEditProperty() {
+    ACTIVE_PROPERTY_ID = null;
+    document.getElementById('editOverlay').classList.remove('open');
+  }
+
+  function deleteProperty(index) {
+    if (index < 0 || index >= PROPERTIES.length) return;
+    const yes = window.confirm('Are you sure you want to delete it?');
+    if (!yes) return;
+    PROPERTIES.splice(index, 1);
+    saveProperties();
+    renderProperties();
+  }
+
+  function savePropertyEdit() {
+    if (ACTIVE_PROPERTY_ID === null || ACTIVE_PROPERTY_ID === undefined) return;
+    const existing = PROPERTIES[ACTIVE_PROPERTY_ID] || {};
+    const next = {
+      id: existing.id || `property-${ACTIVE_PROPERTY_ID + 1}`,
+      title: document.getElementById('e-title').value.trim() || 'Untitled Property',
+      location: document.getElementById('e-location').value.trim() || 'Unknown Location',
+      description: existing.description || '',
+      image: EDIT_IMAGE_VALUE || getPropertyDefaults()[0].image,
+      status: document.getElementById('e-status').value === 'Unlisted' ? 'Unlisted' : 'Listed'
+    };
+
+    PROPERTIES[ACTIVE_PROPERTY_ID] = next;
+    saveProperties();
+    renderProperties();
+    closeEditProperty();
+  }
+
+  document.addEventListener('click', closeAllPropertyMenus);
+
+  PROPERTIES = loadProperties();
+  renderProperties();
+</script>
+</body>
+</html>
