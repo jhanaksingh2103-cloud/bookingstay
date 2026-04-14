@@ -358,6 +358,8 @@ app.get('/api/stats', requireAuth, async (req, res) => {
 
 app.get('*', (req, res) => res.redirect('/'));
 
+console.log('Starting app...');
+
 mongoose.connect(process.env.MONGO_URI)
   .then(async () => {
     console.log('MongoDB connected');
